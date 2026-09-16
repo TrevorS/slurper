@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    # The package targets macOS 26 and uses Core ML's MLTensor, so it needs the macOS 26 image.
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Test
+        # The runner has no models, so the tests that need them skip.
+        run: |
+          xcodebuild build test \
+            -scheme slurper -destination platform=macOS,arch=arm64,variant=macos \
+            -derivedDataPath build -resultBundlePath build/Tests.xcresult -enableCodeCoverage YES \
+            -skipPackagePluginValidation -skipMacroValidation
+
+      - name: Coverage
+        if: always()
+        run: |
+          xcrun xccov view --report --json build/Tests.xcresult | python3 scripts/coverage_report.py | tee coverage.txt
+          { echo '```'; cat coverage.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

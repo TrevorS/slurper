@@ -30,6 +30,11 @@ final class RoformerSeparator: Sendable {
         let n = Self.nFFT
         let f = 1 + (Self.chunkSamples + 2 * Self.pad - n) / hop
         frames = f
+        // The graph is fixed-shape, so a hop that disagrees with the model would only fail inside Core ML,
+        // after the whole previous stage has run.
+        if let shape = model.shape(ofInput: "frames"), shape != [1, 2, f, n] {
+            throw SplitError.model("\(url.lastPathComponent) takes frames \(shape), not [1, 2, \(f), \(n)] at hop \(hop)")
+        }
         let window = (0..<n).map { 0.5 - 0.5 * cos(2 * Float.pi * Float($0) / Float(n)) }  // periodic Hann
         var sum = [Float](repeating: 0, count: n + hop * (f - 1))
         for i in 0..<f {

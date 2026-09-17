@@ -6,7 +6,7 @@
 #     "rotary-embedding-torch==0.3.5", "huggingface-hub",
 # ]
 # ///
-"""Converts Kim Mel-Band RoFormer (vocals) to the Core ML model slurper runs (Sources/SlurperKit/VocalSeparator.swift).
+"""Converts Kim Mel-Band RoFormer (vocals) to the Core ML model slurper runs (Sources/SlurperKit/RoformerSeparator.swift).
 
 The graph is `frames[1,2,801,2048] -> recon[1,2,801,2048]` for one 8 s chunk: windowed DFT as a constant
 matmul, band split, the axial rotary transformer, mask estimator, band average as a constant matmul, the

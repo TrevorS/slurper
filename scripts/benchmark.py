@@ -77,7 +77,10 @@ def main():
 
         subprocess.run([str(slurper), str(mix_path), "--out", str(work / "slurper")], check=True, capture_output=True)
         for s in STEMS:
-            scores["slurper"][s].append(sdr(track.targets[s].audio, read_wav(work / "slurper" / name / f"{s}.wav")))
+            estimate = read_wav(work / "slurper" / name / f"{s}.wav")
+            if s == "other":  # MUSDB18's other includes the horns slurper takes off first
+                estimate = estimate + read_wav(work / "slurper" / name / "horns.wav")
+            scores["slurper"][s].append(sdr(track.targets[s].audio, estimate))
 
         mix = torch.from_numpy(track.audio.T.astype(np.float32).copy())[None]
         for row, model in models.items():

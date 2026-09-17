@@ -17,7 +17,7 @@ make build       # Release build in build/Build/Products/Release
 make test        # unit tests with a coverage report
 make install     # to ~/.local/bin (override with PREFIX=...)
 make benchmark   # score against PyTorch demucs on the MUSDB18 test previews
-make model       # rebuild both Core ML models from PyTorch
+make model       # rebuild the Core ML models from PyTorch
 ```
 
 `make model` runs `scripts/convert_melband_roformer.py`, `scripts/convert_bs_roformer.py` and `scripts/convert_htdemucs.py` through uv, which installs PyTorch, coremltools and the model code into their own environments and downloads the checkpoints from Hugging Face. Each script checks the Core ML model against PyTorch on the GPU before installing it, replacing the downloaded one in `~/Library/Application Support/Slurper/Models/`.
@@ -38,7 +38,7 @@ slurper song.wav --kit drums --loops drums,bass --digitakt
 
 Files are written as 44.1 kHz float WAVs to `~/Music/Slurper/Stems/<title>/`, where `/`, `:` and `\` in the title become `-`, and ` 2`, ` 3`, ... is appended when the folder exists. The first run downloads the 490 MB vocal model, the 94 MB horns model and the 209 MB htdemucs model into `~/Library/Application Support/Slurper/Models` and compiles them, which takes a minute.
 
-Model loading runs alongside the download, vocal chunks run two at a time on the GPU, and each stem is written as soon as it exists. Stems named in `--loops` wait for the drums' bar lines. A 135 s song takes 30 s on an M4 Max.
+Model loading runs alongside the download, vocal chunks run two at a time on the GPU, and each stem is written as soon as it exists. Stems named in `--loops` wait for the drums' bar lines. A 135 s song took 30 s on an M4 Max before the horns stage, which adds a second RoFormer pass over the song (about a minute more on a 6 min track on an M1 Max).
 
 ## Example
 
@@ -60,7 +60,7 @@ SDR in dB, mean over the 50 MUSDB18 test previews (340 s), Core ML build on an M
 | htdemucs_ft (PyTorch) | 8.54 | 9.56 | 8.89 | 4.98 | 7.99 |
 | htdemucs (PyTorch) | 8.41 | 9.54 | 8.47 | 4.91 | 7.83 |
 
-SDR here is 10 log10(Σs² / Σ(s − ŝ)²) over both channels of a track. demucs runs without shifts and with overlap 0.25, as slurper does. slurper's vocals come from Mel-Band RoFormer, and its drums, bass and other from htdemucs run on the mix minus those vocals. The previews are lossy 7-second excerpts, so absolute scores sit below published MUSDB18-HQ numbers. `make benchmark` reproduces the table.
+SDR here is 10 log10(Σs² / Σ(s − ŝ)²) over both channels of a track. demucs runs without shifts and with overlap 0.25, as slurper does. slurper's vocals come from Mel-Band RoFormer, and its drums, bass and other from htdemucs run on the mix minus those vocals and the horns. MUSDB18's other target includes horns, so the benchmark scores slurper's other plus horns against it. The previews are lossy 7-second excerpts, so absolute scores sit below published MUSDB18-HQ numbers. `make benchmark` reproduces the table.
 
 ## Digitakt II export
 
@@ -68,7 +68,7 @@ SDR here is 10 log10(Σs² / Σ(s − ŝ)²) over both channels of a track. demu
 
 ## Kits and loops
 
-`--kit` and `--loops` take any of `mix`, `vocals`, `instrumental`, `drums`, `bass` and `other`, comma-separated. Their files go next to the stem, and under `Digitakt II/` with the title prefix when `--digitakt` is on.
+`--kit` and `--loops` take any of `mix`, `vocals`, `instrumental`, `horns`, `drums`, `bass` and `other`, comma-separated. Their files go next to the stem, and under `Digitakt II/` with the title prefix when `--digitakt` is on.
 
 `--kit drums` writes `drums_kit/drums_01.wav`, `drums_02.wav`, ...: one example of each distinct hit, the most frequent first. Each hit is described by its levels in 24 mel bands in three windows ending 23, 46 and 93 ms after the attack, less its mean level so velocity doesn't split a sound. Hits within 6 dB RMS of a group's mean join it. Groups heard fewer than 3 times are dropped, unless no group reaches 3. Each group keeps, from the half of its hits nearest the group's mean, the one with the least tail from the hit before it and the most room before the next. A kit hit starts 3 ms before its attack, fades out over 5 ms, and runs at most 2 s.
 

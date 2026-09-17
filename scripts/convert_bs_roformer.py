@@ -1,9 +1,9 @@
 #!/usr/bin/env -S uv run --script
 # /// script
-# requires-python = ">=3.12,<3.14"
+# requires-python = ">=3.13,<3.14"
 # dependencies = [
 #     "torch==2.7.0", "coremltools==9.0", "numpy<2", "einops", "beartype", "librosa",
-#     "rotary-embedding-torch==0.3.5", "huggingface-hub", "packaging",
+#     "rotary-embedding-torch==0.3.5", "huggingface-hub",
 # ]
 # ///
 """Converts the MVSep Mega 53-stem BS-RoFormer's wind stem (brass and woodwinds) to the Core ML model slurper
@@ -23,6 +23,7 @@ not do: it has no horns, so the model's output on it is noise around zero.
 Usage: uv run scripts/convert_bs_roformer.py [output.mlpackage]
 """
 
+import hashlib
 import shutil
 import sys
 import tempfile
@@ -79,7 +80,9 @@ MSST_CONFIG = {
 # Airmen of Note (2011): a work of the US government, in the public domain. 8 s from 0:32, where the ensemble
 # horns play the head over the rhythm section.
 GOLDEN = "https://upload.wikimedia.org/wikipedia/commons/5/53/Blues_for_Mundy_-_Airmen_of_Note_-_United_States_Air_Force_Band.mp3"
+GOLDEN_SHA256 = "887d41d68254f2b8cc28759ba0a7bea6199672b4a3ac6efabda5d05ef68f7f1d"
 GOLDEN_OFFSET = 32 * SAMPLE_RATE
+CACHE = Path.home() / ".cache/slurper"
 
 
 def load_reference(workspace):
@@ -224,14 +227,19 @@ def sdr(reference, estimate):
     return float(10 * np.log10((reference**2).sum() / max(((reference - estimate) ** 2).sum(), 1e-20)))
 
 
-def golden_raw(workspace):
-    """[2, CHUNK] float32, the golden excerpt decoded at 44.1 kHz."""
-    file = workspace / "golden.mp3"
-    request = urllib.request.Request(
-        GOLDEN, headers={"User-Agent": "slurper convert_bs_roformer.py"}
-    )  # Wikimedia refuses the default
-    with urllib.request.urlopen(request) as response, file.open("wb") as out:
-        shutil.copyfileobj(response, out)
+def golden_raw():
+    """[2, CHUNK] float32, the golden excerpt decoded at 44.1 kHz. The recording is fetched once into the cache
+    and checked against its hash, since the URL is not versioned."""
+    file = CACHE / "blues_for_mundy.mp3"
+    if not file.exists() or hashlib.sha256(file.read_bytes()).hexdigest() != GOLDEN_SHA256:
+        CACHE.mkdir(parents=True, exist_ok=True)
+        request = urllib.request.Request(
+            GOLDEN, headers={"User-Agent": "slurper convert_bs_roformer.py"}
+        )  # Wikimedia refuses the default
+        with urllib.request.urlopen(request) as response, file.open("wb") as out:
+            shutil.copyfileobj(response, out)
+        if (digest := hashlib.sha256(file.read_bytes()).hexdigest()) != GOLDEN_SHA256:
+            sys.exit(f"golden recording changed: sha256 {digest}, expected {GOLDEN_SHA256}")
     audio, _ = librosa.load(
         file, sr=SAMPLE_RATE, mono=False, offset=GOLDEN_OFFSET / SAMPLE_RATE, duration=CHUNK / SAMPLE_RATE
     )
@@ -245,7 +253,7 @@ def main():
     with tempfile.TemporaryDirectory() as workspace:
         workspace = Path(workspace)
         model = load_reference(workspace)
-        raw = golden_raw(workspace)
+        raw = golden_raw()
         with torch.no_grad():
             reference = model(torch.from_numpy(raw)[None])[0, 0].numpy()  # [2, CHUNK]
             full = Full(model).eval()

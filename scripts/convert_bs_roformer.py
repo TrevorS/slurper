@@ -3,24 +3,27 @@
 # requires-python = ">=3.13,<3.14"
 # dependencies = [
 #     "torch==2.7.0", "coremltools==9.0", "numpy<2", "einops", "beartype", "librosa",
-#     "rotary-embedding-torch==0.3.5", "huggingface-hub",
+#     "rotary-embedding-torch==0.3.5", "huggingface-hub", "packaging",  # packaging: MSST's attend.py imports it
 # ]
 # ///
-"""Converts Kim Mel-Band RoFormer (vocals) to the Core ML model slurper runs (Sources/SlurperKit/RoformerSeparator.swift).
+"""Converts the MVSep Mega 53-stem BS-RoFormer's wind stem (brass and woodwinds) to the Core ML model slurper
+runs as "horns" (Sources/SlurperKit/RoformerSeparator.swift, hop 512).
 
-The graph is `frames[1,2,801,2048] -> recon[1,2,801,2048]` for one 8 s chunk: windowed DFT as a constant
-matmul, band split, the axial rotary transformer, mask estimator, band average as a constant matmul, the
-complex mask multiply in real arithmetic, and the inverse DFT (window included) as another matmul. The host
-reflect-pads and frames the chunk, then overlap-adds `recon` and divides by the summed squared window. The
-recipe follows coreai-model-zoo's melband_roformer export (BSD-3-Clause, Daisuke Majima).
+Same shape of graph as convert_melband_roformer.py, `frames[1,2,690,2048] -> recon[1,2,690,2048]` for one 8 s
+chunk: windowed DFT as a constant matmul, band split, the axial rotary transformer, mask estimator, the complex
+mask multiply in real arithmetic, and the inverse DFT (window included) as another matmul. Two differences from
+the vocal model: the hop is 512 rather than 441 (so 690 frames per chunk), and BS-RoFormer's 62 bands tile the
+spectrum without overlapping, so the mask applies directly and there is no band average.
 
-Before saving, the Core ML output on the GPU is checked against the PyTorch model on a real 8 s chunk, and
-that chunk and PyTorch's vocals are written next to the model as golden_raw.f32 and golden_vocals.f32
-(stereo, channel-major float32) for the Swift tests.
+Before saving, the Core ML output on the GPU is checked against the PyTorch model on a real 8 s chunk of big-band
+horns over a rhythm section, and that chunk and PyTorch's horns are written next to the model as golden_raw.f32
+and golden_horns.f32 (stereo, channel-major float32) for the Swift tests. The vocal model's golden chunk would
+not do: it has no horns, so the model's output on it is noise around zero.
 
-Usage: uv run scripts/convert_melband_roformer.py [output.mlpackage]
+Usage: uv run scripts/convert_bs_roformer.py [output.mlpackage]
 """
 
+import hashlib
 import shutil
 import sys
 import tempfile
@@ -28,6 +31,7 @@ import urllib.request
 from pathlib import Path
 
 import coremltools as ct
+import librosa
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -36,56 +40,66 @@ from torch import nn
 
 SAMPLE_RATE = 44_100
 CHUNK = 352_800
-N_FFT, HOP, PAD = 2048, 441, 1024
+N_FFT, HOP, PAD = 2048, 512, 1024
 BINS = N_FFT // 2 + 1
-FRAMES = 1 + (CHUNK + 2 * PAD - N_FFT) // HOP  # 801
+FRAMES = 1 + (CHUNK + 2 * PAD - N_FFT) // HOP  # 690
 DEFAULT_OUTPUT = (
-    Path.home() / "Library/Application Support/Slurper/Models/MelBandRoformer-Vocal-CoreML/mbr_fp16.mlpackage"
+    Path.home() / "Library/Application Support/Slurper/Models/BSRoformer-Wind-CoreML/bsr_wind_fp16.mlpackage"
 )
 MINIMUM_COSINE = 0.9999
 
-WEIGHTS = ("KimberleyJSN/melbandroformer", "MelBandRoformer.ckpt")
-# The reference implementation the checkpoint was trained with.
-KIM_CODE = "https://raw.githubusercontent.com/KimberleyJensen/Mel-Band-Roformer-Vocal-Model/25f44ffb55ee3c301281bba21b2d6d311cb69ae2"
-KIM_CONFIG = {
-    "dim": 384,
-    "depth": 6,
+# One stem of the MVSep Mega 53-stem model (ZFTurbo's release v1.0.21), repacked as a single-stem checkpoint.
+WEIGHTS = ("noblebarkrr/BS-Roformer-MVSep-Mega-53-stems", "v1/bs_mega_53stem_wind_mvsep.ckpt")
+WEIGHTS_REVISION = "0677941f9cdfd891a6bc3336229244e197035327"
+# The implementation the checkpoint was trained with.
+MSST_CODE = "https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/050cae7345f4ac1e1e27e066c2c5cdc0a2cdb679"
+MSST_CONFIG = {
+    "dim": 256,
+    "depth": 12,
     "stereo": True,
     "num_stems": 1,
     "time_transformer_depth": 1,
     "freq_transformer_depth": 1,
-    "num_bands": 60,
+    "linear_transformer_depth": 0,
+    "freqs_per_bands": (2,) * 24 + (4,) * 12 + (12,) * 8 + (24,) * 8 + (48,) * 8 + (128, 129),
     "dim_head": 64,
     "heads": 8,
     "attn_dropout": 0,
     "ff_dropout": 0,
     "flash_attn": True,
-    "dim_freqs_in": 1025,
-    "sample_rate": SAMPLE_RATE,
+    "dim_freqs_in": BINS,
     "stft_n_fft": N_FFT,
     "stft_hop_length": HOP,
     "stft_win_length": N_FFT,
     "stft_normalized": False,
     "mask_estimator_depth": 2,
+    "mlp_expansion_factor": 2,
+    "skip_connection": False,
 }
-# An 8 s stereo excerpt with vocals, published with the Core AI conversion of this model.
-GOLDEN = ("mlboydaisuke/MelBandRoformer-Vocal-CoreAI", "5cf0e04d08569f4d2f5d89d500a8fb943894330f")
+# "Blues for Mundy" by The Airmen of Note, The United States Air Force Band (Rick Whitehead), from 60 Years of the
+# Airmen of Note (2011): a work of the US government, in the public domain. 8 s from 0:32, where the ensemble
+# horns play the head over the rhythm section.
+GOLDEN = "https://upload.wikimedia.org/wikipedia/commons/5/53/Blues_for_Mundy_-_Airmen_of_Note_-_United_States_Air_Force_Band.mp3"
+GOLDEN_SHA256 = "887d41d68254f2b8cc28759ba0a7bea6199672b4a3ac6efabda5d05ef68f7f1d"
+GOLDEN_OFFSET = 32 * SAMPLE_RATE
+CACHE = Path.home() / ".cache/slurper"
 
 
 def load_reference(workspace):
-    """The Kim repository's MelBandRoformer with its checkpoint, attention routed through F.scaled_dot_product_attention."""
-    package = workspace / "kim/models/mel_band_roformer"
+    """MSST's BSRoformer with the wind checkpoint, attention routed through F.scaled_dot_product_attention."""
+    package = workspace / "msst/models/bs_roformer"
     package.mkdir(parents=True)
-    (workspace / "kim/models/__init__.py").touch()
-    for name in ("__init__.py", "attend.py", "mel_band_roformer.py"):
-        urllib.request.urlretrieve(f"{KIM_CODE}/models/mel_band_roformer/{name}", package / name)
-    sys.path.insert(0, str(workspace / "kim"))
-    from models.mel_band_roformer import attend
-    from models.mel_band_roformer.mel_band_roformer import MelBandRoformer
+    (workspace / "msst/models/__init__.py").touch()
+    (package / "__init__.py").touch()
+    for name in ("attend.py", "bs_roformer.py"):
+        urllib.request.urlretrieve(f"{MSST_CODE}/models/bs_roformer/{name}", package / name)
+    sys.path.insert(0, str(workspace / "msst"))
+    from models.bs_roformer import attend
+    from models.bs_roformer.bs_roformer import BSRoformer
 
     attend.Attend.flash_attn = lambda self, q, k, v: F.scaled_dot_product_attention(q, k, v)
-    model = MelBandRoformer(**KIM_CONFIG).eval()
-    state = torch.load(hf_hub_download(*WEIGHTS), map_location="cpu", weights_only=True)
+    model = BSRoformer(**MSST_CONFIG).eval()
+    state = torch.load(hf_hub_download(*WEIGHTS, revision=WEIGHTS_REVISION), map_location="cpu", weights_only=True)
     missing, unexpected = model.load_state_dict(state, strict=False)
     if missing or unexpected:
         sys.exit(f"checkpoint mismatch: missing {missing[:5]}, unexpected {unexpected[:5]}")
@@ -109,35 +123,25 @@ class FixedRotary(nn.Module):
 
 
 class Core(nn.Module):
-    """MelBandRoformer.forward between the STFT and the iSTFT, in real arithmetic on the reference's submodules."""
+    """BSRoformer.forward between the STFT and the iSTFT, in real arithmetic on the reference's submodules."""
 
     def __init__(self, model):
         super().__init__()
         self.band_split = model.band_split
         self.layers = model.layers
+        self.final_norm = model.final_norm
         self.mask_estimator = model.mask_estimators[0]
-        indices = model.freq_indices.long()
-        self.register_buffer("freq_indices", indices, persistent=False)
-        # Band average: out[f] = sum of the masks at f / number of bands covering f.
-        f2 = model.num_bands_per_freq.numel() * model.audio_channels
-        average = torch.zeros(f2, indices.numel())
-        average[indices, torch.arange(indices.numel())] = 1
-        average /= model.num_bands_per_freq.repeat_interleave(model.audio_channels).clamp(min=1e-8)[:, None]
-        self.register_buffer("average_t", average.t().contiguous(), persistent=False)  # [selected, f2]
-
+        self.zero_dc = model.zero_dc
+        bands = len(model.band_split.dim_inputs)
         for time_transformer, freq_transformer in self.layers:
-            for transformer, length in (
-                (time_transformer, FRAMES),
-                (freq_transformer, len(model.band_split.dim_inputs)),
-            ):
+            for transformer, length in ((time_transformer, FRAMES), (freq_transformer, bands)):
                 for attention, _ in transformer.layers:
                     attention.rotary_embed = FixedRotary(attention.rotary_embed, length)
 
     def forward(self, spec):
         # spec: [b, f2, t, 2] with f2 = (bin, channel) interleaved, last axis real/imaginary.
         b = spec.shape[0]
-        x = spec.index_select(1, self.freq_indices)  # [b, selected, t, 2]
-        x = x.permute(0, 2, 1, 3).reshape(b, FRAMES, -1)  # [b, t, selected * 2]
+        x = spec.permute(0, 2, 1, 3).reshape(b, FRAMES, -1)  # [b, t, f2 * 2]
         x = self.band_split(x)  # [b, t, bands, dim]
         bands = x.shape[2]
         for time_transformer, freq_transformer in self.layers:
@@ -146,16 +150,21 @@ class Core(nn.Module):
             x = x.reshape(b, bands, FRAMES, -1).permute(0, 2, 1, 3).reshape(b * FRAMES, bands, -1)
             x = freq_transformer(x)
             x = x.reshape(b, FRAMES, bands, -1)
-        mask = self.mask_estimator(x)  # [b, t, selected * 2]
-        mask = mask.reshape(b, FRAMES, -1, 2).permute(0, 3, 1, 2)  # [b, 2, t, selected]
-        mask = torch.matmul(mask, self.average_t).permute(0, 3, 2, 1)  # [b, f2, t, 2]
+        x = self.final_norm(x)
+        mask = self.mask_estimator(x)  # [b, t, f2 * 2], bands tile the spectrum so this is the whole mask
+        mask = mask.reshape(b, FRAMES, -1, 2).permute(0, 2, 1, 3)  # [b, f2, t, 2]
         real = spec[..., 0] * mask[..., 0] - spec[..., 1] * mask[..., 1]
         imaginary = spec[..., 0] * mask[..., 1] + spec[..., 1] * mask[..., 0]
-        return torch.stack((real, imaginary), dim=-1)
+        out = torch.stack((real, imaginary), dim=-1)
+        if self.zero_dc:  # the reference silences the DC bin of both channels before the iSTFT
+            keep = torch.ones(out.shape[1], 1, 1, dtype=out.dtype)
+            keep[:2] = 0
+            out = out * keep
+        return out
 
 
 class Full(nn.Module):
-    """frames[b,2,801,2048] -> recon[b,2,801,2048]: windowed DFT, Core, inverse DFT with the synthesis window."""
+    """frames[b,2,690,2048] -> recon[b,2,690,2048]: windowed DFT, Core, inverse DFT with the synthesis window."""
 
     def __init__(self, model):
         super().__init__()
@@ -196,7 +205,7 @@ def frame(audio):
 
 
 def overlap_add(recon):
-    """[2, FRAMES, N_FFT] -> [2, CHUNK], the host's overlap-add, window normalization and trim."""
+    """[2, FRAMES, N_FFT] -> [2, N_FFT + HOP * (FRAMES - 1)], the host's overlap-add and window normalization."""
     total = N_FFT + HOP * (FRAMES - 1)
     window = 0.5 - 0.5 * np.cos(2 * np.pi * np.arange(N_FFT) / N_FFT)
     out = np.zeros((2, total))
@@ -219,8 +228,24 @@ def sdr(reference, estimate):
 
 
 def golden_raw():
-    path = hf_hub_download(GOLDEN[0], "golden_raw.f32", revision=GOLDEN[1])
-    return np.fromfile(path, dtype=np.float32).reshape(2, CHUNK)
+    """[2, CHUNK] float32, the golden excerpt decoded at 44.1 kHz. The recording is fetched once into the cache
+    and checked against its hash, since the URL is not versioned."""
+    file = CACHE / "blues_for_mundy.mp3"
+    if not file.exists() or hashlib.sha256(file.read_bytes()).hexdigest() != GOLDEN_SHA256:
+        CACHE.mkdir(parents=True, exist_ok=True)
+        request = urllib.request.Request(
+            GOLDEN, headers={"User-Agent": "slurper convert_bs_roformer.py"}
+        )  # Wikimedia refuses the default
+        with urllib.request.urlopen(request) as response, file.open("wb") as out:
+            shutil.copyfileobj(response, out)
+        if (digest := hashlib.sha256(file.read_bytes()).hexdigest()) != GOLDEN_SHA256:
+            sys.exit(f"golden recording changed: sha256 {digest}, expected {GOLDEN_SHA256}")
+    audio, _ = librosa.load(
+        file, sr=SAMPLE_RATE, mono=False, offset=GOLDEN_OFFSET / SAMPLE_RATE, duration=CHUNK / SAMPLE_RATE
+    )
+    if audio.shape != (2, CHUNK):
+        sys.exit(f"golden excerpt decoded to {audio.shape}, expected (2, {CHUNK})")
+    return np.ascontiguousarray(audio, dtype=np.float32)
 
 
 def main():
@@ -230,11 +255,11 @@ def main():
         model = load_reference(workspace)
         raw = golden_raw()
         with torch.no_grad():
-            reference = model(torch.from_numpy(raw)[None])[0].numpy()  # [2, CHUNK]
+            reference = model(torch.from_numpy(raw)[None])[0, 0].numpy()  # [2, CHUNK]
             full = Full(model).eval()
             frames = frame(raw)
-            torch_vocals = overlap_add(full(torch.from_numpy(frames))[0].numpy())[:, PAD : PAD + CHUNK]
-            print(f"PyTorch frames->recon vs MelBandRoformer.forward: cosine {cosine(torch_vocals, reference):.7f}")
+            torch_horns = overlap_add(full(torch.from_numpy(frames))[0].numpy())[:, PAD : PAD + CHUNK]
+            print(f"PyTorch frames->recon vs BSRoformer.forward: cosine {cosine(torch_horns, reference):.7f}")
             traced = torch.jit.trace(full, torch.from_numpy(frames), check_trace=False)
 
         converted = ct.convert(
@@ -246,16 +271,15 @@ def main():
             compute_units=ct.ComputeUnit.CPU_AND_GPU,
             minimum_deployment_target=ct.target.macOS15,
         )
-        converted.short_description = "Kim Mel-Band RoFormer vocals (MIT) for one 8 s chunk of STFT frames"
-        converted.license = "MIT"
+        converted.short_description = "MVSep Mega 53-stem BS-RoFormer, wind stem, for one 8 s chunk of STFT frames"
 
         staging = workspace / output.name
         converted.save(str(staging))
         loaded = ct.models.MLModel(str(staging), compute_units=ct.ComputeUnit.CPU_AND_GPU)
         recon = np.asarray(loaded.predict({"frames": frames})["recon"], dtype=np.float32)[0]
-        vocals = overlap_add(recon)[:, PAD : PAD + CHUNK]
-        score = cosine(vocals, reference)
-        print(f"Core ML fp16 vs PyTorch: cosine {score:.7f}, SDR {sdr(reference, vocals):.1f} dB")
+        horns = overlap_add(recon)[:, PAD : PAD + CHUNK]
+        score = cosine(horns, reference)
+        print(f"Core ML fp16 vs PyTorch: cosine {score:.7f}, SDR {sdr(reference, horns):.1f} dB")
         if score < MINIMUM_COSINE:
             sys.exit(f"Core ML output is below cosine {MINIMUM_COSINE} against PyTorch; not installing {output}")
 
@@ -264,8 +288,8 @@ def main():
         output.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(staging, output)
         raw.astype(np.float32).tofile(output.parent / "golden_raw.f32")
-        reference.astype(np.float32).tofile(output.parent / "golden_vocals.f32")
-    print(f"saved {output} and golden_raw.f32, golden_vocals.f32")
+        reference.astype(np.float32).tofile(output.parent / "golden_horns.f32")
+    print(f"saved {output} and golden_raw.f32, golden_horns.f32")
 
 
 if __name__ == "__main__":

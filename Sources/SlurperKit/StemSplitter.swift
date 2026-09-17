@@ -60,7 +60,7 @@ public enum StemSplitter {
     static let roformerRepo = "TrevorJS/MelBandRoformer-Vocal-CoreML"
     static let roformerRevision = "498dbf1b3c800a72be07ab0b15ed37f9d2b2bb05"
     static let hornsRepo = "benkaron/BSRoformer-Wind-CoreML"
-    static let hornsRevision = "main"
+    static let hornsRevision = "3ddc2135e0fe2e559d020bff64431bcbd294b2df"
     static let demucsRepo = "TrevorJS/htdemucs-CoreML"
     static let demucsRevision = "f46494c39557da0b318e8e33af2acc8b354504f6"
 
@@ -80,8 +80,8 @@ public enum StemSplitter {
         var local: URL { StemSplitter.modelsDirectory.appending(path: "\(folder)/\(path)") }
     }
 
-    /// An .mlpackage is a manifest, the model program and its weights. The vocal model's folder also holds
-    /// the golden chunk the tests compare against.
+    /// An .mlpackage is a manifest, the model program and its weights. The RoFormer folders also hold the
+    /// golden chunks the tests compare against.
     private static let modelFiles = [
         ModelFile(repo: roformerRepo, revision: roformerRevision, folder: "MelBandRoformer-Vocal-CoreML",
                   path: "mbr_fp16.mlpackage/Manifest.json", bytes: 617),

@@ -1,6 +1,6 @@
 # slurper
 
-A command-line tool that takes a YouTube URL or a local audio file and writes the mix plus vocals, drums, bass, other and instrumental stems. It can also cut drum kits and bar-aligned loops from the stems, and write copies for the Elektron Digitakt II.
+A command-line tool that takes a YouTube URL or a local audio file and writes the mix plus vocals, horns, drums, bass, other and instrumental stems. It can also cut drum kits and bar-aligned loops from the stems, and write copies for the Elektron Digitakt II.
 
 Version 0.1.0 (`slurper --version`).
 
@@ -20,7 +20,7 @@ make benchmark   # score against PyTorch demucs on the MUSDB18 test previews
 make model       # rebuild both Core ML models from PyTorch
 ```
 
-`make model` runs `scripts/convert_melband_roformer.py` and `scripts/convert_htdemucs.py` through uv, which installs PyTorch, coremltools and the model code into their own environments and downloads the checkpoints from Hugging Face. Each script checks the Core ML model against PyTorch on the GPU before installing it, replacing the downloaded one in `~/Library/Application Support/Slurper/Models/`.
+`make model` runs `scripts/convert_melband_roformer.py`, `scripts/convert_bs_roformer.py` and `scripts/convert_htdemucs.py` through uv, which installs PyTorch, coremltools and the model code into their own environments and downloads the checkpoints from Hugging Face. Each script checks the Core ML model against PyTorch on the GPU before installing it, replacing the downloaded one in `~/Library/Application Support/Slurper/Models/`.
 
 Pushing a `v*` tag builds `slurper-macos-arm64.zip`, which holds the binary, and attaches it to a GitHub release. The build is unsigned, so clear the quarantine flag after unzipping:
 
@@ -36,7 +36,7 @@ slurper song.wav --out ~/Desktop/stems
 slurper song.wav --kit drums --loops drums,bass --digitakt
 ```
 
-Files are written as 44.1 kHz float WAVs to `~/Music/Slurper/Stems/<title>/`, where `/`, `:` and `\` in the title become `-`, and ` 2`, ` 3`, ... is appended when the folder exists. The first run downloads the 490 MB vocal model and the 209 MB htdemucs model into `~/Library/Application Support/Slurper/Models` and compiles them, which takes a minute.
+Files are written as 44.1 kHz float WAVs to `~/Music/Slurper/Stems/<title>/`, where `/`, `:` and `\` in the title become `-`, and ` 2`, ` 3`, ... is appended when the folder exists. The first run downloads the 490 MB vocal model, the 94 MB horns model and the 209 MB htdemucs model into `~/Library/Application Support/Slurper/Models` and compiles them, which takes a minute.
 
 Model loading runs alongside the download, vocal chunks run two at a time on the GPU, and each stem is written as soon as it exists. Stems named in `--loops` wait for the drums' bar lines. A 135 s song takes 30 s on an M4 Max.
 
@@ -80,7 +80,8 @@ The thresholds come from synthetic drums and one 135 s drum and bass track, wher
 
 ## Models
 
-Both run on Core ML as `.mlpackage` bundles, compiled on first use and run on the GPU.
+All three run on Core ML as `.mlpackage` bundles, compiled on first use and run on the GPU.
 
-- Vocals: [Kim Mel-Band RoFormer](https://huggingface.co/KimberleyJSN/melbandroformer) (MIT weights), downloaded from [TrevorJS/MelBandRoformer-Vocal-CoreML](https://huggingface.co/TrevorJS/MelBandRoformer-Vocal-CoreML). `scripts/convert_melband_roformer.py` follows the [coreai-model-zoo](https://github.com/john-rocky/coreai-model-zoo) recipe: the STFT and inverse STFT become constant DFT matmuls inside the graph, the band average becomes a matmul and the complex mask multiply becomes real arithmetic, so the graph is `frames[1,2,801,2048] -> recon[1,2,801,2048]` in float16 and `Sources/SlurperKit/VocalSeparator.swift` only frames and overlap-adds. On an 8 s chunk with vocals the Core ML output matches PyTorch at cosine 0.99995 (39.6 dB SDR).
+- Vocals: [Kim Mel-Band RoFormer](https://huggingface.co/KimberleyJSN/melbandroformer) (MIT weights), downloaded from [TrevorJS/MelBandRoformer-Vocal-CoreML](https://huggingface.co/TrevorJS/MelBandRoformer-Vocal-CoreML). `scripts/convert_melband_roformer.py` follows the [coreai-model-zoo](https://github.com/john-rocky/coreai-model-zoo) recipe: the STFT and inverse STFT become constant DFT matmuls inside the graph, the band average becomes a matmul and the complex mask multiply becomes real arithmetic, so the graph is `frames[1,2,801,2048] -> recon[1,2,801,2048]` in float16 and `Sources/SlurperKit/RoformerSeparator.swift` only frames and overlap-adds. On an 8 s chunk with vocals the Core ML output matches PyTorch at cosine 0.99995 (39.6 dB SDR).
+- Horns (brass and woodwinds): the wind stem of the [MVSep Mega 53-stem BS-RoFormer](https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/tag/v1.0.21), from its [single-stem repack](https://huggingface.co/noblebarkrr/BS-Roformer-MVSep-Mega-53-stems), downloaded from [benkaron/BSRoformer-Wind-CoreML](https://huggingface.co/benkaron/BSRoformer-Wind-CoreML). `scripts/convert_bs_roformer.py` is the vocal recipe with hop 512 (690 frames per 8 s chunk) and no band average, since BS-RoFormer's 62 bands tile the spectrum; the same Swift host runs it. On an 8 s chunk of big-band horns over a rhythm section (the Airmen of Note's "Blues for Mundy", a public-domain US Air Force Band recording) the Core ML output matches PyTorch at cosine 0.99998 (44.7 dB SDR). It takes the horns off the instrumental, before htdemucs, so "other" is the comping instruments.
 - Drums, bass, other: [htdemucs](https://github.com/facebookresearch/demucs) (Meta, MIT), downloaded from [TrevorJS/htdemucs-CoreML](https://huggingface.co/TrevorJS/htdemucs-CoreML). `scripts/convert_htdemucs.py` exports the model's real-valued core for one 7.8 s segment with coremltools, in float32 because float16 overflows, and checks it against PyTorch before saving it: 100-128 dB SDR per stem on a synthetic segment. `Sources/SlurperKit/Demucs.swift` does the STFT, inverse STFT and segment crossfades around it, matching demucs's PyTorch code. Segments run one at a time.

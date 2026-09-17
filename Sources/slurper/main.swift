@@ -5,7 +5,7 @@ let usage = """
     usage: slurper <youtube-url | audio-file> [--digitakt] [--kit STEMS] [--loops STEMS] [--bars N] [--bpm N] [--out DIR]
            slurper --version
 
-    Writes the mix and its vocals, drums, bass, other and instrumental stems as 44.1 kHz float WAVs.
+    Writes the mix and its vocals, horns, drums, bass, other and instrumental stems as 44.1 kHz float WAVs.
       --digitakt     also write 48 kHz 16-bit copies for the Elektron Digitakt II
       --kit STEMS    also keep one example of each distinct hit in these stems
       --loops STEMS  also cut these stems into loops at the drums' bar lines, leaving out repeats

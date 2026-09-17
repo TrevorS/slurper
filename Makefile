@@ -21,8 +21,9 @@ install: build ## Build and install to ~/.local/bin (override with PREFIX=...)
 	mkdir -p $(PREFIX)/bin
 	cp $(PRODUCTS)/slurper $(PREFIX)/bin/slurper
 
-model: ## Rebuild both Core ML models from PyTorch into ~/Library/Application Support/Slurper/Models (needs uv)
+model: ## Rebuild the Core ML models from PyTorch into ~/Library/Application Support/Slurper/Models (needs uv)
 	uv run scripts/convert_melband_roformer.py
+	uv run scripts/convert_bs_roformer.py
 	uv run scripts/convert_htdemucs.py
 
 benchmark: build ## Score slurper against PyTorch demucs on the MUSDB18 test previews (needs uv)

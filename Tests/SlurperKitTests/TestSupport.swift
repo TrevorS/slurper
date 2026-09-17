@@ -79,8 +79,8 @@ func hat(_ signal: inout [Float], at seconds: Double, amplitude: Float) {
     }
 }
 
-let vocalModelInstalled = FileManager.default.fileExists(atPath: StemSplitter.vocalModel.path)
-let hornsModelInstalled = FileManager.default.fileExists(atPath: StemSplitter.hornsModel.path)
+let vocalModelInstalled = FileManager.default.fileExists(atPath: StemSplitter.vocals.package.path)
+let hornsModelInstalled = FileManager.default.fileExists(atPath: StemSplitter.horns.package.path)
 let demucsModelInstalled = FileManager.default.fileExists(atPath: StemSplitter.demucsModel.path)
 let modelsInstalled = vocalModelInstalled && hornsModelInstalled && demucsModelInstalled
 

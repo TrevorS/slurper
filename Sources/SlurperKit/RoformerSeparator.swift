@@ -22,6 +22,10 @@ final class RoformerSeparator: Sendable {
     private let windowSquareSum: [Float]
     private let chunksAtOnce: Int
 
+    convenience init(_ model: StemSplitter.RoformerModel, chunksAtOnce: Int) async throws {
+        try await self.init(model: model.package, hop: model.hop, chunksAtOnce: chunksAtOnce)
+    }
+
     init(model url: URL, hop: Int, chunksAtOnce: Int) async throws {
         model = try await Model(package: url, inputs: ["frames"], outputs: ["recon"])
         self.hop = hop

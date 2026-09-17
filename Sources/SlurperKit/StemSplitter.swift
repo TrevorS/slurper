@@ -53,16 +53,30 @@ public enum StemSplitter {
     public static let outputRoot = URL.musicDirectory.appending(path: "Slurper/Stems", directoryHint: .isDirectory)
     public static let stemNames = ["mix", "vocals", "instrumental", "horns", "drums", "bass", "other"]
     static let modelsDirectory = URL.applicationSupportDirectory.appending(path: "Slurper/Models", directoryHint: .isDirectory)
-    static let vocalModel = modelsDirectory.appending(path: "MelBandRoformer-Vocal-CoreML/mbr_fp16.mlpackage", directoryHint: .isDirectory)
-    static let hornsModel = modelsDirectory.appending(path: "BSRoformer-Wind-CoreML/bsr_wind_fp16.mlpackage", directoryHint: .isDirectory)
     static let demucsModel = modelsDirectory.appending(path: "htdemucs-CoreML/htdemucs_fp32.mlpackage", directoryHint: .isDirectory)
-
-    static let roformerRepo = "TrevorJS/MelBandRoformer-Vocal-CoreML"
-    static let roformerRevision = "498dbf1b3c800a72be07ab0b15ed37f9d2b2bb05"
-    static let hornsRepo = "benkaron/BSRoformer-Wind-CoreML"
-    static let hornsRevision = "3ddc2135e0fe2e559d020bff64431bcbd294b2df"
     static let demucsRepo = "TrevorJS/htdemucs-CoreML"
     static let demucsRevision = "f46494c39557da0b318e8e33af2acc8b354504f6"
+
+    /// A RoFormer model: where its Core ML package comes from, and the STFT hop it was converted at, which
+    /// fixes the graph's frame count.
+    struct RoformerModel {
+        let folder: String
+        let file: String
+        let repo: String
+        let revision: String
+        let hop: Int
+
+        var package: URL { StemSplitter.modelsDirectory.appending(path: "\(folder)/\(file)", directoryHint: .isDirectory) }
+    }
+
+    static let vocals = RoformerModel(
+        folder: "MelBandRoformer-Vocal-CoreML", file: "mbr_fp16.mlpackage",
+        repo: "TrevorJS/MelBandRoformer-Vocal-CoreML", revision: "498dbf1b3c800a72be07ab0b15ed37f9d2b2bb05", hop: 441
+    )
+    static let horns = RoformerModel(
+        folder: "BSRoformer-Wind-CoreML", file: "bsr_wind_fp16.mlpackage",
+        repo: "benkaron/BSRoformer-Wind-CoreML", revision: "3ddc2135e0fe2e559d020bff64431bcbd294b2df", hop: 512
+    )
 
     /// Two concurrent chunks were fastest on an M2 (vocals 29 s vs 31 s for one, on a 60 s clip);
     /// three and four were slower.
@@ -83,25 +97,25 @@ public enum StemSplitter {
     /// An .mlpackage is a manifest, the model program and its weights. The RoFormer folders also hold the
     /// golden chunks the tests compare against.
     private static let modelFiles = [
-        ModelFile(repo: roformerRepo, revision: roformerRevision, folder: "MelBandRoformer-Vocal-CoreML",
-                  path: "mbr_fp16.mlpackage/Manifest.json", bytes: 617),
-        ModelFile(repo: roformerRepo, revision: roformerRevision, folder: "MelBandRoformer-Vocal-CoreML",
-                  path: "mbr_fp16.mlpackage/Data/com.apple.CoreML/model.mlmodel", bytes: 598_363),
-        ModelFile(repo: roformerRepo, revision: roformerRevision, folder: "MelBandRoformer-Vocal-CoreML",
-                  path: "mbr_fp16.mlpackage/Data/com.apple.CoreML/weights/weight.bin", bytes: 489_706_048),
-        ModelFile(repo: roformerRepo, revision: roformerRevision, folder: "MelBandRoformer-Vocal-CoreML",
+        ModelFile(repo: vocals.repo, revision: vocals.revision, folder: vocals.folder,
+                  path: "\(vocals.file)/Manifest.json", bytes: 617),
+        ModelFile(repo: vocals.repo, revision: vocals.revision, folder: vocals.folder,
+                  path: "\(vocals.file)/Data/com.apple.CoreML/model.mlmodel", bytes: 598_363),
+        ModelFile(repo: vocals.repo, revision: vocals.revision, folder: vocals.folder,
+                  path: "\(vocals.file)/Data/com.apple.CoreML/weights/weight.bin", bytes: 489_706_048),
+        ModelFile(repo: vocals.repo, revision: vocals.revision, folder: vocals.folder,
                   path: "golden_raw.f32", bytes: 2_822_400),
-        ModelFile(repo: roformerRepo, revision: roformerRevision, folder: "MelBandRoformer-Vocal-CoreML",
+        ModelFile(repo: vocals.repo, revision: vocals.revision, folder: vocals.folder,
                   path: "golden_vocals.f32", bytes: 2_822_400),
-        ModelFile(repo: hornsRepo, revision: hornsRevision, folder: "BSRoformer-Wind-CoreML",
-                  path: "bsr_wind_fp16.mlpackage/Manifest.json", bytes: 617),
-        ModelFile(repo: hornsRepo, revision: hornsRevision, folder: "BSRoformer-Wind-CoreML",
-                  path: "bsr_wind_fp16.mlpackage/Data/com.apple.CoreML/model.mlmodel", bytes: 748_990),
-        ModelFile(repo: hornsRepo, revision: hornsRevision, folder: "BSRoformer-Wind-CoreML",
-                  path: "bsr_wind_fp16.mlpackage/Data/com.apple.CoreML/weights/weight.bin", bytes: 94_421_760),
-        ModelFile(repo: hornsRepo, revision: hornsRevision, folder: "BSRoformer-Wind-CoreML",
+        ModelFile(repo: horns.repo, revision: horns.revision, folder: horns.folder,
+                  path: "\(horns.file)/Manifest.json", bytes: 617),
+        ModelFile(repo: horns.repo, revision: horns.revision, folder: horns.folder,
+                  path: "\(horns.file)/Data/com.apple.CoreML/model.mlmodel", bytes: 748_990),
+        ModelFile(repo: horns.repo, revision: horns.revision, folder: horns.folder,
+                  path: "\(horns.file)/Data/com.apple.CoreML/weights/weight.bin", bytes: 94_421_760),
+        ModelFile(repo: horns.repo, revision: horns.revision, folder: horns.folder,
                   path: "golden_raw.f32", bytes: 2_822_400),
-        ModelFile(repo: hornsRepo, revision: hornsRevision, folder: "BSRoformer-Wind-CoreML",
+        ModelFile(repo: horns.repo, revision: horns.revision, folder: horns.folder,
                   path: "golden_horns.f32", bytes: 2_822_400),
         ModelFile(repo: demucsRepo, revision: demucsRevision, folder: "htdemucs-CoreML",
                   path: "htdemucs_fp32.mlpackage/Manifest.json", bytes: 617),
@@ -168,8 +182,8 @@ public enum StemSplitter {
 
     private static func loadModels(_ emit: @escaping @Sendable (SplitEvent) -> Void) async throws -> Models {
         try await downloadModels(emit)
-        async let vocals = RoformerSeparator(model: vocalModel, hop: 441, chunksAtOnce: roformerChunksAtOnce)
-        async let horns = RoformerSeparator(model: hornsModel, hop: 512, chunksAtOnce: roformerChunksAtOnce)
+        async let vocals = RoformerSeparator(Self.vocals, chunksAtOnce: roformerChunksAtOnce)
+        async let horns = RoformerSeparator(Self.horns, chunksAtOnce: roformerChunksAtOnce)
         async let demucs = Demucs(model: demucsModel)
         return try await Models(vocals: vocals, horns: horns, demucs: demucs)
     }

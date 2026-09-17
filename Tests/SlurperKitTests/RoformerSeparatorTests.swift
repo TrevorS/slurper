@@ -13,39 +13,39 @@ struct RoformerSeparatorTests {
     /// `scripts/convert_melband_roformer.py` and downloaded with it.
     @Test(.enabled(if: vocalModelInstalled))
     func vocalsMatchPublishedGolden() async throws {
-        try await expectGolden(model: StemSplitter.vocalModel, hop: 441, stem: "golden_vocals.f32")
+        try await expectGolden(StemSplitter.vocals, stem: "golden_vocals.f32")
     }
 
     /// Compares one 8 s chunk against PyTorch's horns, written next to the model by
     /// `scripts/convert_bs_roformer.py` and downloaded with it.
     @Test(.enabled(if: hornsModelInstalled))
     func hornsMatchPublishedGolden() async throws {
-        try await expectGolden(model: StemSplitter.hornsModel, hop: 512, stem: "golden_horns.f32")
+        try await expectGolden(StemSplitter.horns, stem: "golden_horns.f32")
     }
 
     @Test(.enabled(if: hornsModelInstalled))
     func rejectsTheWrongHop() async throws {
         await #expect(throws: SplitError.self) {
-            try await RoformerSeparator(model: StemSplitter.hornsModel, hop: 441, chunksAtOnce: 1)
+            try await RoformerSeparator(model: StemSplitter.horns.package, hop: StemSplitter.vocals.hop, chunksAtOnce: 1)
         }
     }
 
     @Test(.enabled(if: vocalModelInstalled))
     func parallelChunksGiveIdenticalStems() async throws {
         let mix = noise(frames: 44_100 * 20, channels: 2, amplitude: 0.1)
-        let serial = try await RoformerSeparator(model: StemSplitter.vocalModel, hop: 441, chunksAtOnce: 1).stem(of: mix) { _ in }
-        let parallel = try await RoformerSeparator(model: StemSplitter.vocalModel, hop: 441, chunksAtOnce: 3).stem(of: mix) { _ in }
+        let serial = try await RoformerSeparator(StemSplitter.vocals, chunksAtOnce: 1).stem(of: mix) { _ in }
+        let parallel = try await RoformerSeparator(StemSplitter.vocals, chunksAtOnce: 3).stem(of: mix) { _ in }
         #expect(serial[0].count == mix[0].count)
         #expect(parallel == serial)
     }
 
     /// Runs the model on `golden_raw.f32` next to it and compares against `stem`, PyTorch's output for that chunk.
-    private func expectGolden(model: URL, hop: Int, stem: String) async throws {
-        let raw = try golden("golden_raw.f32", by: model)
-        let expected = try golden(stem, by: model)
+    private func expectGolden(_ model: StemSplitter.RoformerModel, stem: String) async throws {
+        let raw = try golden("golden_raw.f32", by: model.package)
+        let expected = try golden(stem, by: model.package)
         let n = RoformerSeparator.chunkSamples
 
-        let separator = try await RoformerSeparator(model: model, hop: hop, chunksAtOnce: 1)
+        let separator = try await RoformerSeparator(model, chunksAtOnce: 1)
         let got = try await separator.stem(ofChunk: [Array(raw[0..<n]), Array(raw[n..<2 * n])])
         let flat = got[0] + got[1]
         let cosine = vDSP.dot(flat, expected) / (vDSP.sumOfSquares(flat) * vDSP.sumOfSquares(expected)).squareRoot()

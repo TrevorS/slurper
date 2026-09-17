@@ -60,7 +60,7 @@ SDR in dB, mean over the 50 MUSDB18 test previews (340 s), Core ML build on an M
 | htdemucs_ft (PyTorch) | 8.54 | 9.56 | 8.89 | 4.98 | 7.99 |
 | htdemucs (PyTorch) | 8.41 | 9.54 | 8.47 | 4.91 | 7.83 |
 
-SDR here is 10 log10(Σs² / Σ(s − ŝ)²) over both channels of a track. demucs runs without shifts and with overlap 0.25, as slurper does. slurper's vocals come from Mel-Band RoFormer, and its drums, bass and other from htdemucs run on the mix minus those vocals and the horns. MUSDB18's other target includes horns, so the benchmark scores slurper's other plus horns against it. The previews are lossy 7-second excerpts, so absolute scores sit below published MUSDB18-HQ numbers. `make benchmark` reproduces the table.
+SDR here is 10 log10(Σs² / Σ(s − ŝ)²) over both channels of a track. demucs runs without shifts and with overlap 0.25, as slurper does. slurper's vocals come from Mel-Band RoFormer, and its drums, bass and other from htdemucs run on the mix minus those vocals and the horns. MUSDB18's other target includes horns, so the benchmark scores slurper's other plus horns against it. The previews are lossy 7-second excerpts, so absolute scores sit below published MUSDB18-HQ numbers. The table was measured before the horns stage; `make benchmark` reproduces it.
 
 ## Digitakt II export
 

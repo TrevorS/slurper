@@ -3,7 +3,7 @@
 # requires-python = ">=3.13,<3.14"
 # dependencies = [
 #     "torch==2.7.0", "coremltools==9.0", "numpy<2", "einops", "beartype", "librosa",
-#     "rotary-embedding-torch==0.3.5", "huggingface-hub",
+#     "rotary-embedding-torch==0.3.5", "huggingface-hub", "packaging",  # packaging: MSST's attend.py imports it
 # ]
 # ///
 """Converts the MVSep Mega 53-stem BS-RoFormer's wind stem (brass and woodwinds) to the Core ML model slurper

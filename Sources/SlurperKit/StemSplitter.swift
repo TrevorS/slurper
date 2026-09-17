@@ -206,19 +206,19 @@ public enum StemSplitter {
             }
             store("mix", mix)
 
-            /// Stores the stem a RoFormer takes off `input` and returns what is left.
-            func peel(_ stage: SplitEvent.Stage, with model: RoformerSeparator, from input: [[Float]]) async throws -> [[Float]] {
+            /// Stores the stem a RoFormer takes off `input` as `name` and returns what is left.
+            func peel(_ name: String, stage: SplitEvent.Stage, with model: RoformerSeparator, from input: [[Float]]) async throws -> [[Float]] {
                 emit(SplitEvent(stage: stage, progress: 0, title: title))
                 let stem = try await model.stem(of: input) { emit(SplitEvent(stage: stage, progress: $0, title: title)) }
-                store(stage.rawValue, stem)
+                store(name, stem)
                 return (0..<2).map { vDSP.subtract(input[$0], stem[$0]) }
             }
 
-            let instrumental = try await peel(.vocals, with: models.vocals, from: mix)
+            let instrumental = try await peel("vocals", stage: .vocals, with: models.vocals, from: mix)
             store("instrumental", instrumental)
             // Horns come off the instrumental rather than the mix so the vocal model's mistakes stay in
             // one place; htdemucs then never sees them, and its "other" is the comping instruments.
-            let band = try await peel(.horns, with: models.horns, from: instrumental)
+            let band = try await peel("horns", stage: .horns, with: models.horns, from: instrumental)
 
             emit(SplitEvent(stage: .stems, progress: 0, title: title))
             let stems = try await models.demucs.stems(of: band) { emit(SplitEvent(stage: .stems, progress: $0, title: title)) }

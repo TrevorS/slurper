@@ -31,6 +31,11 @@ final class Model: @unchecked Sendable {
     func run(_ inputs: [String: MLTensor]) async throws -> [String: MLTensor] {
         try await model.prediction(from: inputs)
     }
+
+    /// The fixed shape of a multiarray input, or nil when the model does not declare one.
+    func shape(ofInput name: String) -> [Int]? {
+        model.modelDescription.inputDescriptionsByName[name]?.multiArrayConstraint?.shape.map(\.intValue)
+    }
 }
 
 extension MLTensor {

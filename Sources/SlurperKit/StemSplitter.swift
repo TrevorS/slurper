@@ -3,7 +3,7 @@ import Foundation
 
 public struct SplitEvent: Sendable {
     public enum Stage: String, Sendable {
-        case models, download, decode, vocals, stems, beats, write, done
+        case models, download, decode, vocals, horns, stems, beats, write, done
     }
 
     public var stage: Stage
@@ -46,23 +46,41 @@ enum SplitError: LocalizedError {
 }
 
 /// yt-dlp fetches the audio (or a local file is decoded), Mel-Band RoFormer on Core ML separates the vocals,
-/// and htdemucs on Core ML splits the instrumental (mix minus vocals) into drums, bass and other.
+/// a BS-RoFormer on Core ML takes the horns (brass and woodwinds) off the instrumental (mix minus vocals),
+/// and htdemucs on Core ML splits what is left into drums, bass and other.
 public enum StemSplitter {
     public static let version = "0.1.0"
     public static let outputRoot = URL.musicDirectory.appending(path: "Slurper/Stems", directoryHint: .isDirectory)
-    public static let stemNames = ["mix", "vocals", "instrumental", "drums", "bass", "other"]
+    public static let stemNames = ["mix", "vocals", "instrumental", "horns", "drums", "bass", "other"]
     static let modelsDirectory = URL.applicationSupportDirectory.appending(path: "Slurper/Models", directoryHint: .isDirectory)
-    static let vocalModel = modelsDirectory.appending(path: "MelBandRoformer-Vocal-CoreML/mbr_fp16.mlpackage", directoryHint: .isDirectory)
     static let demucsModel = modelsDirectory.appending(path: "htdemucs-CoreML/htdemucs_fp32.mlpackage", directoryHint: .isDirectory)
-
-    static let roformerRepo = "TrevorJS/MelBandRoformer-Vocal-CoreML"
-    static let roformerRevision = "498dbf1b3c800a72be07ab0b15ed37f9d2b2bb05"
     static let demucsRepo = "TrevorJS/htdemucs-CoreML"
     static let demucsRevision = "f46494c39557da0b318e8e33af2acc8b354504f6"
 
+    /// A RoFormer model: where its Core ML package comes from, and the STFT hop it was converted at, which
+    /// fixes the graph's frame count.
+    struct RoformerModel {
+        let folder: String
+        let file: String
+        let repo: String
+        let revision: String
+        let hop: Int
+
+        var package: URL { StemSplitter.modelsDirectory.appending(path: "\(folder)/\(file)", directoryHint: .isDirectory) }
+    }
+
+    static let vocals = RoformerModel(
+        folder: "MelBandRoformer-Vocal-CoreML", file: "mbr_fp16.mlpackage",
+        repo: "TrevorJS/MelBandRoformer-Vocal-CoreML", revision: "498dbf1b3c800a72be07ab0b15ed37f9d2b2bb05", hop: 441
+    )
+    static let horns = RoformerModel(
+        folder: "BSRoformer-Wind-CoreML", file: "bsr_wind_fp16.mlpackage",
+        repo: "benkaron/BSRoformer-Wind-CoreML", revision: "3ddc2135e0fe2e559d020bff64431bcbd294b2df", hop: 512
+    )
+
     /// Two concurrent chunks were fastest on an M2 (vocals 29 s vs 31 s for one, on a 60 s clip);
     /// three and four were slower.
-    private static let vocalChunksAtOnce = 2
+    private static let roformerChunksAtOnce = 2
 
     private struct ModelFile {
         let repo: String
@@ -76,19 +94,29 @@ public enum StemSplitter {
         var local: URL { StemSplitter.modelsDirectory.appending(path: "\(folder)/\(path)") }
     }
 
-    /// An .mlpackage is a manifest, the model program and its weights. The vocal model's folder also holds
-    /// the golden chunk the tests compare against.
+    /// An .mlpackage is a manifest, the model program and its weights. The RoFormer folders also hold the
+    /// golden chunks the tests compare against.
     private static let modelFiles = [
-        ModelFile(repo: roformerRepo, revision: roformerRevision, folder: "MelBandRoformer-Vocal-CoreML",
-                  path: "mbr_fp16.mlpackage/Manifest.json", bytes: 617),
-        ModelFile(repo: roformerRepo, revision: roformerRevision, folder: "MelBandRoformer-Vocal-CoreML",
-                  path: "mbr_fp16.mlpackage/Data/com.apple.CoreML/model.mlmodel", bytes: 598_363),
-        ModelFile(repo: roformerRepo, revision: roformerRevision, folder: "MelBandRoformer-Vocal-CoreML",
-                  path: "mbr_fp16.mlpackage/Data/com.apple.CoreML/weights/weight.bin", bytes: 489_706_048),
-        ModelFile(repo: roformerRepo, revision: roformerRevision, folder: "MelBandRoformer-Vocal-CoreML",
+        ModelFile(repo: vocals.repo, revision: vocals.revision, folder: vocals.folder,
+                  path: "\(vocals.file)/Manifest.json", bytes: 617),
+        ModelFile(repo: vocals.repo, revision: vocals.revision, folder: vocals.folder,
+                  path: "\(vocals.file)/Data/com.apple.CoreML/model.mlmodel", bytes: 598_363),
+        ModelFile(repo: vocals.repo, revision: vocals.revision, folder: vocals.folder,
+                  path: "\(vocals.file)/Data/com.apple.CoreML/weights/weight.bin", bytes: 489_706_048),
+        ModelFile(repo: vocals.repo, revision: vocals.revision, folder: vocals.folder,
                   path: "golden_raw.f32", bytes: 2_822_400),
-        ModelFile(repo: roformerRepo, revision: roformerRevision, folder: "MelBandRoformer-Vocal-CoreML",
+        ModelFile(repo: vocals.repo, revision: vocals.revision, folder: vocals.folder,
                   path: "golden_vocals.f32", bytes: 2_822_400),
+        ModelFile(repo: horns.repo, revision: horns.revision, folder: horns.folder,
+                  path: "\(horns.file)/Manifest.json", bytes: 617),
+        ModelFile(repo: horns.repo, revision: horns.revision, folder: horns.folder,
+                  path: "\(horns.file)/Data/com.apple.CoreML/model.mlmodel", bytes: 748_990),
+        ModelFile(repo: horns.repo, revision: horns.revision, folder: horns.folder,
+                  path: "\(horns.file)/Data/com.apple.CoreML/weights/weight.bin", bytes: 94_421_760),
+        ModelFile(repo: horns.repo, revision: horns.revision, folder: horns.folder,
+                  path: "golden_raw.f32", bytes: 2_822_400),
+        ModelFile(repo: horns.repo, revision: horns.revision, folder: horns.folder,
+                  path: "golden_horns.f32", bytes: 2_822_400),
         ModelFile(repo: demucsRepo, revision: demucsRevision, folder: "htdemucs-CoreML",
                   path: "htdemucs_fp32.mlpackage/Manifest.json", bytes: 617),
         ModelFile(repo: demucsRepo, revision: demucsRevision, folder: "htdemucs-CoreML",
@@ -147,15 +175,17 @@ public enum StemSplitter {
     // MARK: - Pipeline
 
     struct Models: Sendable {
-        let vocals: VocalSeparator
+        let vocals: RoformerSeparator
+        let horns: RoformerSeparator
         let demucs: Demucs
     }
 
     private static func loadModels(_ emit: @escaping @Sendable (SplitEvent) -> Void) async throws -> Models {
         try await downloadModels(emit)
-        async let vocals = VocalSeparator(model: vocalModel, chunksAtOnce: vocalChunksAtOnce)
+        async let vocals = RoformerSeparator(Self.vocals, chunksAtOnce: roformerChunksAtOnce)
+        async let horns = RoformerSeparator(Self.horns, chunksAtOnce: roformerChunksAtOnce)
         async let demucs = Demucs(model: demucsModel)
-        return try await Models(vocals: vocals, demucs: demucs)
+        return try await Models(vocals: vocals, horns: horns, demucs: demucs)
     }
 
     private static func fetch(_ url: String, into work: URL, emit: @escaping @Sendable (SplitEvent) -> Void) async throws -> (String, [[Float]]) {
@@ -166,7 +196,7 @@ public enum StemSplitter {
 
     private static func decode(_ file: URL, title: String, emit: @Sendable (SplitEvent) -> Void) async throws -> [[Float]] {
         emit(SplitEvent(stage: .decode, title: title))
-        return try AudioFiles.readStereo(file, sampleRate: Double(VocalSeparator.sampleRate))
+        return try AudioFiles.readStereo(file, sampleRate: Double(RoformerSeparator.sampleRate))
     }
 
     /// Each stem is written (and exported for the Digitakt) as soon as it exists, while the next model runs.
@@ -190,21 +220,29 @@ public enum StemSplitter {
             }
             store("mix", mix)
 
-            emit(SplitEvent(stage: .vocals, progress: 0, title: title))
-            let vocals = try await models.vocals.vocals(of: mix) { emit(SplitEvent(stage: .vocals, progress: $0, title: title)) }
-            let instrumental = (0..<2).map { vDSP.subtract(mix[$0], vocals[$0]) }
-            store("vocals", vocals)
+            /// Stores the stem a RoFormer takes off `input` as `name` and returns what is left.
+            func peel(_ name: String, stage: SplitEvent.Stage, with model: RoformerSeparator, from input: [[Float]]) async throws -> [[Float]] {
+                emit(SplitEvent(stage: stage, progress: 0, title: title))
+                let stem = try await model.stem(of: input) { emit(SplitEvent(stage: stage, progress: $0, title: title)) }
+                store(name, stem)
+                return (0..<2).map { vDSP.subtract(input[$0], stem[$0]) }
+            }
+
+            let instrumental = try await peel("vocals", stage: .vocals, with: models.vocals, from: mix)
             store("instrumental", instrumental)
+            // Horns come off the instrumental rather than the mix so the vocal model's mistakes stay in
+            // one place; htdemucs then never sees them, and its "other" is the comping instruments.
+            let band = try await peel("horns", stage: .horns, with: models.horns, from: instrumental)
 
             emit(SplitEvent(stage: .stems, progress: 0, title: title))
-            let stems = try await models.demucs.stems(of: instrumental) { emit(SplitEvent(stage: .stems, progress: $0, title: title)) }
+            let stems = try await models.demucs.stems(of: band) { emit(SplitEvent(stage: .stems, progress: $0, title: title)) }
             for name in ["drums", "bass", "other"] {
                 guard let stem = stems[name] else { throw SplitError.model("htdemucs returned no \(name) stem") }
                 store(name, stem)
             }
 
             if !waiting.isEmpty, let drums = stems["drums"] {
-                let grid = Beats.grid(of: drums, sampleRate: Double(VocalSeparator.sampleRate), bpm: options.bpm)
+                let grid = Beats.grid(of: drums, sampleRate: Double(RoformerSeparator.sampleRate), bpm: options.bpm)
                 let note = grid.map { grid in
                     let found = "\(Int(grid.bpm.rounded())) bpm, \(grid.downbeats.count) bar lines"
                     return grid.downbeats.count > options.bars ? found : found + ", too few for \(options.bars)-bar loops"
@@ -227,7 +265,7 @@ public enum StemSplitter {
 
         /// Writes the stem, its kit if asked for, its loops if there is a `grid`, and their Digitakt copies.
         func save(_ name: String, _ audio: [[Float]], grid: Beats.Grid? = nil) throws {
-            let rate = Double(VocalSeparator.sampleRate)
+            let rate = Double(RoformerSeparator.sampleRate)
             try AudioFiles.writeWAV(audio, sampleRate: rate, to: folder.appending(path: "\(name).wav"))
             var chops: [Chops] = []
             if options.kit.contains(name) { chops.append(Kit.chops(of: audio, sampleRate: rate)) }

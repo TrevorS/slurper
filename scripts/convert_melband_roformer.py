@@ -45,6 +45,7 @@ DEFAULT_OUTPUT = (
 MINIMUM_COSINE = 0.9999
 
 WEIGHTS = ("KimberleyJSN/melbandroformer", "MelBandRoformer.ckpt")
+WEIGHTS_REVISION = "ac9b0614ab3cd7f77219e18ba494dfd93956c348"
 # The reference implementation the checkpoint was trained with.
 KIM_CODE = "https://raw.githubusercontent.com/KimberleyJensen/Mel-Band-Roformer-Vocal-Model/25f44ffb55ee3c301281bba21b2d6d311cb69ae2"
 KIM_CONFIG = {
@@ -68,8 +69,9 @@ KIM_CONFIG = {
     "stft_normalized": False,
     "mask_estimator_depth": 2,
 }
-# An 8 s stereo excerpt with vocals, published with the Core AI conversion of this model.
-GOLDEN = ("mlboydaisuke/MelBandRoformer-Vocal-CoreAI", "5cf0e04d08569f4d2f5d89d500a8fb943894330f")
+# An 8 s stereo excerpt with vocals, first published with the Core AI conversion of this model
+# (mlboydaisuke/MelBandRoformer-Vocal-CoreAI) and kept, byte for byte, with the Core ML one.
+GOLDEN = ("TrevorJS/MelBandRoformer-Vocal-CoreML", "498dbf1b3c800a72be07ab0b15ed37f9d2b2bb05")
 
 
 def load_reference(workspace):
@@ -85,7 +87,7 @@ def load_reference(workspace):
 
     attend.Attend.flash_attn = lambda self, q, k, v: F.scaled_dot_product_attention(q, k, v)
     model = MelBandRoformer(**KIM_CONFIG).eval()
-    state = torch.load(hf_hub_download(*WEIGHTS), map_location="cpu", weights_only=True)
+    state = torch.load(hf_hub_download(*WEIGHTS, revision=WEIGHTS_REVISION), map_location="cpu", weights_only=True)
     missing, unexpected = model.load_state_dict(state, strict=False)
     if missing or unexpected:
         sys.exit(f"checkpoint mismatch: missing {missing[:5]}, unexpected {unexpected[:5]}")

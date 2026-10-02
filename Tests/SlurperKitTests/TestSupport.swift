@@ -83,6 +83,8 @@ let vocalModelInstalled = FileManager.default.fileExists(atPath: StemSplitter.vo
 let hornsModelInstalled = FileManager.default.fileExists(atPath: StemSplitter.horns.package.path)
 let demucsModelInstalled = FileManager.default.fileExists(atPath: StemSplitter.demucsModel.package.path)
 let modelsInstalled = vocalModelInstalled && hornsModelInstalled && demucsModelInstalled
+let sheetSageInstalled = [StemSplitter.sheetSageEncoder, StemSplitter.sheetSageDecoder]
+    .allSatisfy { FileManager.default.fileExists(atPath: $0.package.path) }
 
 private final class BundleMarker {}
 

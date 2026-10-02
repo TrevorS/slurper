@@ -3,7 +3,7 @@ import Foundation
 
 public struct SplitEvent: Sendable {
     public enum Stage: String, Sendable {
-        case models, download, decode, vocals, horns, stems, beats, write, done
+        case models, download, decode, vocals, horns, stems, transcribe, beats, write, done
     }
 
     public var stage: Stage
@@ -18,14 +18,19 @@ public struct SplitOptions: Sendable {
     public var digitakt: Bool
     /// Stems (from `StemSplitter.stemNames`) to build a kit from: one example of each distinct hit.
     public var kit: Set<String>
-    /// Stems to cut into loops at the drum stem's bar lines.
+    /// Stems to cut into loops at the bar lines.
     public var loops: Set<String>
     public var bars: Int
-    /// Tempo for the loops' bar lines instead of estimating it.
+    /// Tempo for the loops' bar lines instead of estimating it from the drums.
     public var bpm: Double?
+    /// Also transcribe the mix with SheetSage2, whose bar lines the loops then use unless `bpm` is set.
+    public var transcribe: Bool
 
-    public init(digitakt: Bool = false, kit: Set<String> = [], loops: Set<String> = [], bars: Int = 4, bpm: Double? = nil) {
-        (self.digitakt, self.kit, self.loops, self.bars, self.bpm) = (digitakt, kit, loops, bars, bpm)
+    public init(
+        digitakt: Bool = false, kit: Set<String> = [], loops: Set<String> = [], bars: Int = 4, bpm: Double? = nil,
+        transcribe: Bool = false
+    ) {
+        (self.digitakt, self.kit, self.loops, self.bars, self.bpm, self.transcribe) = (digitakt, kit, loops, bars, bpm, transcribe)
     }
 }
 
@@ -110,6 +115,16 @@ public enum StemSplitter {
         repo: "TrevorJS/htdemucs-CoreML", revision: "f46494c39557da0b318e8e33af2acc8b354504f6",
         file: "htdemucs_fp32.mlpackage", programBytes: 538_090, weightBytes: 209_160_960
     )
+    /// SheetSage2's two models share a repository. The encoder's entry also downloads the window the tests decode.
+    static let sheetSageEncoder = HostedModel(
+        repo: "TrevorJS/SheetSage2-CoreML", revision: "89e75e924380afe88c9ca312115f0fa2e5b3ac13",
+        file: "encoder_fp32.mlpackage", programBytes: 625_605, weightBytes: 2_565_107_840,
+        extras: ["golden_audio.f32": 2_880_000, "golden_tokens.json": 2_430]
+    )
+    static let sheetSageDecoder = HostedModel(
+        repo: "TrevorJS/SheetSage2-CoreML", revision: "89e75e924380afe88c9ca312115f0fa2e5b3ac13",
+        file: "decoder_fp16.mlpackage", programBytes: 113_546, weightBytes: 81_902_076
+    )
 
     /// Two concurrent chunks were fastest on an M2 (vocals 29 s vs 31 s for one, on a 60 s clip);
     /// three and four were slower.
@@ -126,7 +141,11 @@ public enum StemSplitter {
         var local: URL { StemSplitter.modelsDirectory.appending(path: "\(folder)/\(path)") }
     }
 
-    private static let modelFiles = vocals.hosted.files + horns.hosted.files + demucsModel.files
+    /// The separation models, and SheetSage2's only when transcribing.
+    private static func modelFiles(transcribe: Bool) -> [ModelFile] {
+        vocals.hosted.files + horns.hosted.files + demucsModel.files
+            + (transcribe ? sheetSageEncoder.files + sheetSageDecoder.files : [])
+    }
 
     /// yt-dlp needs ffmpeg and deno, which may not be on the caller's PATH.
     private static let searchPath = [
@@ -141,7 +160,7 @@ public enum StemSplitter {
             try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: work) }
 
-            async let models = loadModels(emit)
+            async let models = loadModels(transcribe: options.transcribe, emit)
             async let source = fetch(url, into: work, emit: emit)
             let (title, mix) = try await source
             try await separate(mix, title: title, models: models, outputRoot: outputRoot, options: options, emit: emit)
@@ -153,7 +172,7 @@ public enum StemSplitter {
     ) -> AsyncThrowingStream<SplitEvent, Error> {
         stream { emit in
             let title = file.deletingPathExtension().lastPathComponent
-            async let models = loadModels(emit)
+            async let models = loadModels(transcribe: options.transcribe, emit)
             async let mix = decode(file, title: title, emit: emit)
             try await separate(mix, title: title, models: models, outputRoot: outputRoot, options: options, emit: emit)
         }
@@ -181,14 +200,17 @@ public enum StemSplitter {
         let vocals: RoformerSeparator
         let horns: RoformerSeparator
         let demucs: Demucs
+        let sheetSage: SheetSage?
     }
 
-    private static func loadModels(_ emit: @escaping @Sendable (SplitEvent) -> Void) async throws -> Models {
-        try await downloadModels(emit)
+    private static func loadModels(transcribe: Bool, _ emit: @escaping @Sendable (SplitEvent) -> Void) async throws -> Models {
+        try await downloadModels(modelFiles(transcribe: transcribe), emit)
         async let vocals = RoformerSeparator(Self.vocals, chunksAtOnce: roformerChunksAtOnce)
         async let horns = RoformerSeparator(Self.horns, chunksAtOnce: roformerChunksAtOnce)
         async let demucs = Demucs(model: demucsModel.package)
-        return try await Models(vocals: vocals, horns: horns, demucs: demucs)
+        async let sheetSage = transcribe
+            ? SheetSage(encoder: sheetSageEncoder.package, decoder: sheetSageDecoder.package) : nil
+        return try await Models(vocals: vocals, horns: horns, demucs: demucs, sheetSage: sheetSage)
     }
 
     private static func fetch(_ url: String, into work: URL, emit: @escaping @Sendable (SplitEvent) -> Void) async throws -> (String, [[Float]]) {
@@ -203,7 +225,8 @@ public enum StemSplitter {
     }
 
     /// Each stem is written (and exported for the Digitakt) as soon as it exists, while the next model runs.
-    /// Stems cut into loops wait for the drum stem's bar lines.
+    /// SheetSage2 transcribes the mix alongside the separation. Stems cut into loops wait for the bar lines:
+    /// SheetSage2's when it ran (unless a tempo was given), otherwise the drum stem's.
     private static func separate(
         _ mix: [[Float]], title: String, models: Models, outputRoot: URL, options: SplitOptions,
         emit: @escaping @Sendable (SplitEvent) -> Void
@@ -213,6 +236,7 @@ public enum StemSplitter {
         var finished = false
         defer { if !finished { try? FileManager.default.removeItem(at: output.folder) } }
         try await withThrowingTaskGroup(of: Void.self) { writes in
+            async let transcription = transcribe(mix, with: models.sheetSage, title: title, emit: emit)
             var waiting: [(name: String, audio: [[Float]])] = []
             func store(_ name: String, _ audio: [[Float]]) {
                 if options.loops.contains(name) {
@@ -244,10 +268,19 @@ public enum StemSplitter {
                 store(name, stem)
             }
 
+            let heard = try await transcription
+            if let heard {
+                emit(SplitEvent(stage: .transcribe, title: title, note: heard.summary))
+                writes.addTask { try heard.write(to: output.folder) }
+            }
+
             if !waiting.isEmpty, let drums = stems["drums"] {
-                let grid = Beats.grid(of: drums, sampleRate: Double(RoformerSeparator.sampleRate), bpm: options.bpm)
+                let rate = Double(RoformerSeparator.sampleRate)
+                let transcribed = options.bpm == nil ? heard?.grid(snappedTo: drums, sampleRate: rate) : nil
+                let grid = transcribed ?? Beats.grid(of: drums, sampleRate: rate, bpm: options.bpm)
                 let note = grid.map { grid in
                     let found = "\(Int(grid.bpm.rounded())) bpm, \(grid.downbeats.count) bar lines"
+                        + (transcribed == nil ? "" : " from SheetSage2")
                     return grid.downbeats.count > options.bars ? found : found + ", too few for \(options.bars)-bar loops"
                 } ?? "no steady beat in the drums, so no loops"
                 emit(SplitEvent(stage: .beats, title: title, note: note))
@@ -259,6 +292,15 @@ public enum StemSplitter {
         }
         finished = true
         emit(SplitEvent(stage: .done, title: title, folder: output.folder))
+    }
+
+    private static func transcribe(
+        _ mix: [[Float]], with model: SheetSage?, title: String, emit: @escaping @Sendable (SplitEvent) -> Void
+    ) async throws -> Transcription? {
+        guard let model else { return nil }
+        emit(SplitEvent(stage: .transcribe, progress: 0, title: title))
+        let mono = try SheetSage.mono(mix, sampleRate: Double(RoformerSeparator.sampleRate))
+        return try await model.transcribe(mono) { emit(SplitEvent(stage: .transcribe, progress: $0, title: title)) }
     }
 
     private struct Output: Sendable {
@@ -364,8 +406,8 @@ public enum StemSplitter {
         return (title, file)
     }
 
-    private static func downloadModels(_ emit: @escaping @Sendable (SplitEvent) -> Void) async throws {
-        let missing = modelFiles.filter { !FileManager.default.fileExists(atPath: $0.local.path) }
+    private static func downloadModels(_ files: [ModelFile], _ emit: @escaping @Sendable (SplitEvent) -> Void) async throws {
+        let missing = files.filter { !FileManager.default.fileExists(atPath: $0.local.path) }
         guard !missing.isEmpty else { return }
         let total = Double(missing.reduce(0) { $0 + $1.bytes })
         emit(SplitEvent(stage: .models, progress: 0))

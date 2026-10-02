@@ -1,6 +1,6 @@
 # slurper
 
-A command-line tool that takes a YouTube URL or a local audio file and writes the mix plus vocals, horns, drums, bass, other and instrumental stems. It can also cut drum kits and bar-aligned loops from the stems, and write copies for the Elektron Digitakt II.
+A command-line tool that takes a YouTube URL or a local audio file and writes the mix plus vocals, horns, drums, bass, other and instrumental stems. It can also cut drum kits and bar-aligned loops from the stems, transcribe the song's beats, key, chords, sections and melody, and write copies for the Elektron Digitakt II.
 
 Version 0.1.0 (`slurper --version`).
 
@@ -20,7 +20,7 @@ make benchmark   # score against PyTorch demucs on the MUSDB18 test previews
 make model       # rebuild the Core ML models from PyTorch
 ```
 
-`make model` runs `scripts/convert_melband_roformer.py`, `scripts/convert_bs_roformer.py` and `scripts/convert_htdemucs.py` through uv, which installs PyTorch, coremltools and the model code into their own environments and downloads the checkpoints from Hugging Face. Each script checks the Core ML model against PyTorch on the GPU before installing it, replacing the downloaded one in `~/Library/Application Support/Slurper/Models/`.
+`make model` runs `scripts/convert_melband_roformer.py`, `scripts/convert_bs_roformer.py`, `scripts/convert_htdemucs.py` and `scripts/convert_sheetsage2.py` through uv, which installs PyTorch, coremltools and the model code into their own environments and downloads the checkpoints from Hugging Face. Each script checks the Core ML model against PyTorch on the GPU before installing it, replacing the downloaded one in `~/Library/Application Support/Slurper/Models/`.
 
 Pushing a `v*` tag builds `slurper-macos-arm64.zip`, which holds the binary, and attaches it to a GitHub release. The build is unsigned, so clear the quarantine flag after unzipping:
 
@@ -34,11 +34,12 @@ xattr -d com.apple.quarantine slurper
 slurper "https://www.youtube.com/watch?v=..." --digitakt
 slurper song.wav --out ~/Desktop/stems
 slurper song.wav --kit drums --loops drums,bass --digitakt
+slurper song.wav --transcribe --loops drums,bass
 ```
 
-Files are written as 44.1 kHz float WAVs to `~/Music/Slurper/Stems/<title>/`, where `/`, `:` and `\` in the title become `-`, and ` 2`, ` 3`, ... is appended when the folder exists. The first run downloads the 490 MB vocal model, the 94 MB horns model and the 209 MB htdemucs model into `~/Library/Application Support/Slurper/Models` and compiles them, which takes a minute.
+Files are written as 44.1 kHz float WAVs to `~/Music/Slurper/Stems/<title>/`, where `/`, `:` and `\` in the title become `-`, and ` 2`, ` 3`, ... is appended when the folder exists. The first run downloads the 490 MB vocal model, the 94 MB horns model and the 209 MB htdemucs model into `~/Library/Application Support/Slurper/Models` and compiles them, which takes a minute. The first `--transcribe` run also downloads SheetSage2's 2.6 GB encoder and 82 MB decoder.
 
-Model loading runs alongside the download, vocal chunks run two at a time on the GPU, and each stem is written as soon as it exists. Stems named in `--loops` wait for the drums' bar lines. A 135 s song took 30 s on an M4 Max before the horns stage, which adds a second RoFormer pass over the song (about a minute more on a 6 min track on an M1 Max).
+Model loading runs alongside the download, vocal chunks run two at a time on the GPU, and each stem is written as soon as it exists. Stems named in `--loops` wait for the bar lines. A 135 s song took 30 s on an M4 Max before the horns stage, which adds a second RoFormer pass over the song (about a minute more on a 6 min track on an M1 Max).
 
 ## Example
 
@@ -78,10 +79,28 @@ Hits are found with spectral flux on the log magnitude (1024-sample frames, 256-
 
 The thresholds come from synthetic drums and one 135 s drum and bass track, where the tracker found 170.00 BPM and every bar came within 17 ms of that tempo's bar length. On that track, kicks landing about 65 ms after another hit are missed (41 of 369 kick-band peaks). A 7 s loop at 144 BPM read as 72 BPM and needed `--bpm 144`. Nothing measures how steady a beat is, so drums without one can still produce a tempo and loops.
 
+## Transcription
+
+`--transcribe` runs [SheetSage2](https://huggingface.co/m-a-p/SheetSage2) on the mix while the stems separate and writes `transcription/`:
+
+- `beat.lab`: one row per beat, with its time, its place in the bar, and the meter's numerator and denominator
+- `downbeat.lab`: the bar lines
+- `key.lab`, `chord.lab`, `structure.lab`: start, end and label. Chords are spelled for the key at their midpoint, so D#:maj in C minor is written Eb:maj.
+- `melody_vocal.mid`, `melody_instrumental.mid` and `chords.mid`, and all three as tracks of `transcription.mid`
+
+`swift scripts/play_midi.swift transcription.mid` plays a MIDI file through macOS's built-in General MIDI sounds.
+
+With `--loops`, the loops are cut at SheetSage2's bar lines instead of the drum tracker's, each moved to a drum attack within 30 ms, so a song in 3/4 or without a steady kick still gets bar-aligned loops. `--bpm` goes back to the drum tracker.
+
+SheetSage2's weights, and those of MERT-v2-FullSong under them, are licensed CC BY-NC 4.0: non-commercial use only, with attribution. Work that uses the transcriptions should cite the SheetSage2 technical report (Jiang et al., 2026) and MERT (Li et al., ICLR 2024).
+
+On "Swansong" (256 s), transcribing took 8.5 s by itself on an M4 Max, and added 7 s and 1 GB of peak memory to the full split. PyTorch on the CPU took 20.9 s. Given the same 24 kHz samples, slurper's beat, downbeat, key, chord and section files are byte for byte those of SheetSage2's PyTorch pipeline. Decoding takes the most likely token at every step, so small numeric differences can change the result: on a 512 s test (Swansong twice) the float16 decoder picked a different token than PyTorch at 66 s. After that, only 22% of the two runs' beats fall within 50 ms of each other, though they name the same key throughout and the same chord 88% of the time. slurper also reads files at 44.1 kHz and resamples them, where SheetSage2 decodes straight to 24 kHz, which changes the input slightly.
+
 ## Models
 
-All three run on Core ML as `.mlpackage` bundles, compiled on first use and run on the GPU.
+All four run on Core ML as `.mlpackage` bundles, compiled on first use and run on the GPU.
 
 - Vocals: [Kim Mel-Band RoFormer](https://huggingface.co/KimberleyJSN/melbandroformer) (MIT weights), downloaded from [TrevorJS/MelBandRoformer-Vocal-CoreML](https://huggingface.co/TrevorJS/MelBandRoformer-Vocal-CoreML). `scripts/convert_melband_roformer.py` follows the [coreai-model-zoo](https://github.com/john-rocky/coreai-model-zoo) recipe: the STFT and inverse STFT become constant DFT matmuls inside the graph, the band average becomes a matmul and the complex mask multiply becomes real arithmetic, so the graph is `frames[1,2,801,2048] -> recon[1,2,801,2048]` in float16 and `Sources/SlurperKit/RoformerSeparator.swift` only frames and overlap-adds. On an 8 s chunk with vocals the Core ML output matches PyTorch at cosine 0.99995 (39.6 dB SDR).
 - Horns (brass and woodwinds): the wind stem of the [MVSep Mega 53-stem BS-RoFormer](https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/tag/v1.0.21), from its [single-stem repack](https://huggingface.co/noblebarkrr/BS-Roformer-MVSep-Mega-53-stems), converted by Ben Karon and downloaded from [TrevorJS/BSRoformer-Wind-CoreML](https://huggingface.co/TrevorJS/BSRoformer-Wind-CoreML), a mirror of [benkaron/BSRoformer-Wind-CoreML](https://huggingface.co/benkaron/BSRoformer-Wind-CoreML). `scripts/convert_bs_roformer.py` is the vocal recipe with hop 512 (690 frames per 8 s chunk) and no band average, since BS-RoFormer's 62 bands tile the spectrum; the same Swift host runs it. On an 8 s chunk of big-band horns over a rhythm section (the Airmen of Note's "Blues for Mundy", a public-domain US Air Force Band recording) the Core ML output matches PyTorch at cosine 0.99998 (44.7 dB SDR). It takes the horns off the instrumental, before htdemucs, so "other" is the comping instruments.
 - Drums, bass, other: [htdemucs](https://github.com/facebookresearch/demucs) (Meta, MIT), downloaded from [TrevorJS/htdemucs-CoreML](https://huggingface.co/TrevorJS/htdemucs-CoreML). `scripts/convert_htdemucs.py` exports the model's real-valued core for one 7.8 s segment with coremltools, in float32 because float16 overflows, and checks it against PyTorch before saving it: 100-128 dB SDR per stem on a synthetic segment. `Sources/SlurperKit/Demucs.swift` does the STFT, inverse STFT and segment crossfades around it, matching demucs's PyTorch code. Segments run one at a time. htdemucs also returns a vocals stem, which is dropped: whatever vocal bleed reaches it is not in any written file, so the stems do not sum exactly to the mix.
+- Transcription: [SheetSage2](https://huggingface.co/m-a-p/SheetSage2) (m-a-p, CC BY-NC 4.0 weights, revision `398b228`) on [MERT-v2-FullSong](https://huggingface.co/m-a-p/MERT-v2-FullSong), downloaded from [TrevorJS/SheetSage2-CoreML](https://huggingface.co/TrevorJS/SheetSage2-CoreML) by the first `--transcribe` run. `scripts/convert_sheetsage2.py` makes two models. The encoder takes 300 s of 24 kHz mono, with the log-mel frontend as a strided convolution with DFT weights inside the graph, and returns the decoder's cross-attention keys and values. It stays float32: at float16 the decoded tokens changed 27 tokens into a song. The decoder is one step of the 6-layer BART decoder in float16, with its caches as Core ML states. `Sources/SlurperKit/SheetSage.swift` runs it a token at a time under SheetSage2's event grammar and stitches 300 s windows 100 s apart as SheetSage2's pipeline does. Before installing, the script requires the Core ML models to decode exactly PyTorch's tokens for 30 s of "Swansong".

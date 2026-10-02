@@ -32,6 +32,16 @@ final class Model: @unchecked Sendable {
         try await model.prediction(from: inputs)
     }
 
+    /// Fresh buffers for a stateful model's states.
+    func makeState() -> MLState {
+        model.makeState()
+    }
+
+    /// One prediction that reads and updates `state`.
+    func run(_ inputs: MLFeatureProvider, state: MLState) throws -> MLFeatureProvider {
+        try model.prediction(from: inputs, using: state)
+    }
+
     /// The fixed shape of a multiarray input, or nil when the model does not declare one.
     func shape(ofInput name: String) -> [Int]? {
         model.modelDescription.inputDescriptionsByName[name]?.multiArrayConstraint?.shape.map(\.intValue)

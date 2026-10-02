@@ -2,15 +2,18 @@ import Foundation
 import SlurperKit
 
 let usage = """
-    usage: slurper <youtube-url | audio-file> [--digitakt] [--kit STEMS] [--loops STEMS] [--bars N] [--bpm N] [--out DIR]
+    usage: slurper <youtube-url | audio-file> [--digitakt] [--transcribe] [--kit STEMS] [--loops STEMS] [--bars N] [--bpm N]
+                   [--out DIR]
            slurper --version
 
     Writes the mix and its vocals, horns, drums, bass, other and instrumental stems as 44.1 kHz float WAVs.
       --digitakt     also write 48 kHz 16-bit copies for the Elektron Digitakt II
+      --transcribe   also write the beats, key, chords, sections and melody (SheetSage2: non-commercial use only,
+                     a 2.6 GB download), and cut loops at its bar lines
       --kit STEMS    also keep one example of each distinct hit in these stems
-      --loops STEMS  also cut these stems into loops at the drums' bar lines, leaving out repeats
+      --loops STEMS  also cut these stems into loops at the bar lines, leaving out repeats
       --bars N       bars per loop (default 4)
-      --bpm N        tempo for the bar lines, when the estimate lands on half or double
+      --bpm N        tempo for the drums' bar lines, when the estimate lands on half or double
       --out DIR      parent folder for the stems (default ~/Music/Slurper/Stems)
     STEMS is a comma-separated list from \(StemSplitter.stemNames.joined(separator: ", ")).
     """
@@ -25,8 +28,8 @@ if arguments == ["--version"] {
     print("slurper \(StemSplitter.version)")
     exit(0)
 }
-var options = SplitOptions(digitakt: arguments.contains("--digitakt"))
-arguments.removeAll { $0 == "--digitakt" }
+var options = SplitOptions(digitakt: arguments.contains("--digitakt"), transcribe: arguments.contains("--transcribe"))
+arguments.removeAll { $0 == "--digitakt" || $0 == "--transcribe" }
 var values: [String: String] = [:]
 for flag in ["--out", "--kit", "--loops", "--bars", "--bpm"] {
     if let index = arguments.firstIndex(of: flag), arguments.indices.contains(index + 1) {

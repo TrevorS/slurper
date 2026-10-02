@@ -25,6 +25,7 @@ model: ## Rebuild the Core ML models from PyTorch into ~/Library/Application Sup
 	uv run scripts/convert_melband_roformer.py
 	uv run scripts/convert_bs_roformer.py
 	uv run scripts/convert_htdemucs.py
+	uv run scripts/convert_sheetsage2.py
 
 benchmark: build ## Score slurper against PyTorch demucs on the MUSDB18 test previews (needs uv)
 	uv run scripts/benchmark.py $(PRODUCTS)/slurper build/benchmark

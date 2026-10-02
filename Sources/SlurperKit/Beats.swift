@@ -37,15 +37,20 @@ enum Beats {
         }!
 
         // Frames are coarse and flux peaks as a hit enters the frame, so bar lines move to the nearby attack.
+        let downbeats = snapped(stride(from: phase, to: beats.count, by: beatsPerBar).map { beats[$0] * Transients.hop },
+                                toAttacksIn: mono, sampleRate: sampleRate)
+        let span = Double((beats.last! - beats.first!) * Transients.hop)
+        return Grid(bpm: 60 * sampleRate * Double(beats.count - 1) / span, downbeats: downbeats)
+    }
+
+    /// Each position moved to the nearest attack in `mono` when one is within 30 ms.
+    static func snapped(_ positions: [Int], toAttacksIn mono: [Float], sampleRate: Double) -> [Int] {
         let attacks = Transients.onsets(of: mono, sampleRate: sampleRate)
         let reach = Int(0.03 * sampleRate)
-        let downbeats = stride(from: phase, to: beats.count, by: beatsPerBar).map { i in
-            let position = beats[i] * Transients.hop
+        return positions.map { position in
             let nearest = attacks.min { abs($0 - position) < abs($1 - position) }
             return nearest.map { abs($0 - position) <= reach ? $0 : position } ?? position
         }
-        let span = Double((beats.last! - beats.first!) * Transients.hop)
-        return Grid(bpm: 60 * sampleRate * Double(beats.count - 1) / span, downbeats: downbeats)
     }
 
     /// Frames per beat: the autocorrelation peak of the onset envelope between 70 and 180 BPM, weighted toward

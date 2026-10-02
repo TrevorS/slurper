@@ -41,7 +41,9 @@ Files are written as 44.1 kHz float WAVs to `~/Music/Slurper/Stems/<title>/`, wh
 
 Model loading runs alongside the download, vocal chunks run two at a time on the GPU, and each stem is written as soon as it exists. Stems named in `--loops` wait for the bar lines. A 135 s song took 30 s on an M4 Max before the horns stage, which adds a second RoFormer pass over the song (about a minute more on a 6 min track on an M1 Max).
 
-## Example
+## Examples
+
+### Swansong
 
 Thirty seconds of "Swansong" by [Josh Woodward](https://www.joshwoodward.com/song/Swansong), from *Breadcrumbs* (2009), [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Split with `slurper Swansong.mp3`, cut from 2:07 and encoded as 320 kbps MP3s in `assets/swansong/`:
 
@@ -50,6 +52,20 @@ Thirty seconds of "Swansong" by [Josh Woodward](https://www.joshwoodward.com/son
 ![Mel spectrograms of the excerpt: the mix, then its vocals, drums, bass and other stems](assets/swansong/spectrogram.png)
 
 `scripts/spectrogram.py` draws the figure, on one dB scale relative to the mix's peak.
+
+### Blues for Mundy
+
+Thirty seconds of "Blues for Mundy" by The Airmen of Note, The United States Air Force Band (composed by Rick Whitehead), from *60 Years of the Airmen of Note* (2011), via [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Blues_for_Mundy_-_Airmen_of_Note_-_United_States_Air_Force_Band.mp3). As a work of the US federal government the recording is in the public domain. Split and transcribed with `slurper "Blues for Mundy.mp3" --transcribe`, cut from 0:09.75 and encoded as 320 kbps MP3s in `assets/blues-for-mundy/`:
+
+[mix](assets/blues-for-mundy/mix.mp3) · [horns](assets/blues-for-mundy/horns.mp3) · [drums](assets/blues-for-mundy/drums.mp3) · [bass](assets/blues-for-mundy/bass.mp3) · [other](assets/blues-for-mundy/other.mp3)
+
+![Mel spectrograms of the excerpt: the mix with SheetSage2's bar lines and chords, then its horns, drums, bass and other stems](assets/blues-for-mundy/spectrogram.png)
+
+The horns come in 14 s into the excerpt to play the head; before that the horns stem is silent. The dashed lines over the mix are the bar lines from `transcription/downbeat.lab` and the names are the chords from `transcription/chord.lab`, a 12-bar blues in Bb. A chord shorter than about a bar is left unlabeled in the figure. [`transcription/`](assets/blues-for-mundy/transcription) holds the whole song's files: Bb major in `key.lab`, and the melody and chords in `transcription.mid`. The vocal melody is empty, since the song has no vocals.
+
+The beats are wrong after 0:41. Up to there they follow the band at about 158 BPM. From 0:41 to the end, `beat.lab` places every beat exactly 0.32 s apart (187.5 BPM), though the drum stem stays near 158 BPM, so the bar lines and the chords placed on them drift from the music, and slurper reports 187 BPM for the song. The excerpt ends before 0:41. Whether SheetSage2's PyTorch pipeline does the same on this recording hasn't been checked.
+
+The figure is `uv run scripts/spectrogram.py assets/blues-for-mundy --transcription assets/blues-for-mundy/transcription --start 9.75`.
 
 ## Stem quality
 
